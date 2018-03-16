@@ -3,8 +3,10 @@ module Protocol where
 
 open import Agda.Primitive
 open import Serialize public
-
-
+open import Prelude.Nat
+open import Prelude.Product
+open import Prelude.Ord hiding (min)
+open import Prelude.Semiring
 
 -- To be erased
 postulate
@@ -12,40 +14,66 @@ postulate
 
 
 
--- These are used to differentiate them from the original version. This is to be dealt differently than the other version.
-
-infixr 1 _,_
-record Σₙ {a b} (A : Set a) (B : A → Set b) : Set (a ⊔ b) where
-  no-eta-equality
-  constructor _,_
-  field
-    fst : A
-    snd : B fst
-
-open Σₙ public
-
-infixr 3 _×ₙ_
-_×ₙ_ : ∀ {a b} → Set a → Set b → Set (a ⊔ b)
-A ×ₙ B = Σₙ A (λ _ → B)
-
-
-
-
+-- FIX THIS. Provide an implementation here.
 instance
 
   SerializableNProduct : ∀{a b} → {A : Set a} → {B : A → Set b} → {{ _ : Serializable A}}
-                        → {{_ : {x : A} → Serializable (B x)}} → Serializable (Σₙ A B)
-  encode {{SerializableNProduct}} = eraseMe
+                        → {{_ : {x : A} → Serializable (B x)}} → Serializable (Σ A B)
+  encode {{SerializableNProduct}} = eraseMe 
   decode {{SerializableNProduct}} = eraseMe
 
 
 
 
 
-record PF {a b} {Role : Set} (r : Role) (A : Set a) (B : A → Set b)
-          {{_ : Serializable A}} {{_ : {x : A} → Serializable (B x)}} (vr : Role) : Set (a ⊔ b) where
+record Timeout : Set where
+  constructor timeout
+  field
+    ms : Nat
+    s : Nat
+    min : Nat
+    hour : Nat
+    day : Nat
+
+
+
+module _ where
+
+  open Timeout
+  
+  data _≤ₜ_ (a b : Timeout) : Set where
+    ineq : ms a + (s a * 1000) + (min a * 60 * 1000) + (hour a * 60 * 60 * 1000) + (hour a * 24 * 60 * 60 * 1000) < ms b + (s b * 1000) + (min b * 60 * 1000) + (hour b * 60 * 60 * 1000) + (hour b * 24 * 60 * 60 * 1000) → a ≤ₜ b
+
+
+
+record PF {a b} {Role : Set} (r : Role) (A : Set a) {{sa : Serializable A}} (B : A → Set b)
+          {{sb : {x : A} → Serializable (B x)}} (t : Timeout) (vr : Role) : Set (a ⊔ b) where
+  constructor doNotUseThisConstructor
   field
     _<l_ : (x : A) → B x
-
 open PF public
 
+
+instance
+  unPF : ∀{a b} {Role : Set} {r : Role} {A : Set a} {{sa : Serializable A}} {B : A → Set b}
+          {{sb : {x : A} → Serializable (B x)}} {t : Timeout} {vr : Role} → PF r A B t vr
+  unPF = eraseMe
+
+---- This is created to have an instance error.
+  pF : ∀{a b} {Role : Set} {r : Role} {A : Set a} {{sa : Serializable A}} {B : A → Set b}
+          {{sb : {x : A} → Serializable (B x) }} {t : Timeout} → PF r A B t r
+  pF ._<l_ x = eraseMe
+
+
+
+
+
+constS : ∀{a b} → {A : Set a} → (B : Set b) → (A → Set b)
+constS B = λ _ → B
+
+
+
+
+-- This should not be permitted with this iteration of PF. It may still be helpfull though.
+cproj : ∀{a b} → {A : Set a} → {B : Set b} → Σ A (constS B) → B
+cproj (fst , snd) = snd
