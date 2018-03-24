@@ -77,3 +77,14 @@ constS B = λ _ → B
 -- This should not be permitted with this iteration of PF. It may still be helpfull though.
 cproj : ∀{a b} → {A : Set a} → {B : Set b} → Σ A (constS B) → B
 cproj (fst , snd) = snd
+
+---------------------
+
+open import Prelude.Equality
+open import Prelude.Empty
+
+
+boo : ∀{a b} {RA RB : Set} {r : RA} {A : Set a} {{sa : Serializable A}} {B : A → Set b}
+      {{sb : {x : A} → Serializable (B x)}} {t : Timeout} {vr : RA} {g : RA → RB} → {neq : ¬ ( r ≡ vr) → ¬ (g r ≡ g vr)} → PF (g r) A B t (g vr) → PF r A B t vr
+_<l_ (boo pf) = _<l_ pf
+

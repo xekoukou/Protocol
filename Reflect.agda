@@ -80,6 +80,7 @@ mutual
   showArgPtn zero tb (arg i x) = nspace tb & ""
   showArgPtn (suc n) tb (arg i x) = nspace tb & showPatternn n tb x
 
+-- Pts are in reverse order.
   showArgPts : Nat → Tab → List (Arg Pattern) → String
   showArgPts n tb args = foldr (λ arg s → "\n" & showArgPtn n tb arg & s) "[" args & " ]"
 

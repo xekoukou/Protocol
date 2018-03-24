@@ -61,9 +61,9 @@ foldt : ∀{a B} → {A : Set a} → List (Arg B) → (f : A → B → A) → A 
 foldt xs f i = foldr (λ { (arg i x) y → f y x}) i xs
 
 
-clToPtLen : Clause → Nat
-clToPtLen (clause ps t) = length ps
-clToPtLen (absurd-clause ps) = length ps
+clToPtLen : Clause → Maybe Nat
+clToPtLen (clause ps t) = just $ length ps
+clToPtLen (absurd-clause ps) = nothing
 
 -- The Nat is the deBruijn limit. Equal or greater are metavariables.
 clToDb : Clause → Maybe Nat
@@ -89,6 +89,9 @@ clToTerm (absurd-clause ps) = nothing
 
 clsToTerms : List Clause → List Term
 clsToTerms cls = foldr (λ x y → case (clToTerm x) of (λ { nothing → y ; (just x) → x ∷ y})) [] cls
+
+clsToPtLens : List Clause → List Nat
+clsToPtLens cls = foldr (λ x y → case (clToPtLen x) of (λ { nothing → y ; (just x) → x ∷ y})) [] cls
 
 
 isItPFCon : ∀{ℓ} → {A : Set ℓ} → A → Name → TC A
@@ -195,7 +198,7 @@ noVarsBelowDB n (lam v (abs s x)) = noVarsBelowDB (suc n) x
 noVarsBelowDB n (pat-lam cs args) =
   do
     tcs ← return (clsToTerms cs)
-    lens ← return $ map clToPtLen cs
+    lens ← return (clsToPtLens cs)
     foldr (λ x y → let px = fst x ; len = snd x in noVarsBelowDB (n + len) px) (return unit) (zip tcs lens)
     foldt args (λ x y → noVarsBelowDB n y) (return unit)
 noVarsBelowDB n x = return unit
@@ -241,7 +244,7 @@ performCheck2 db (lam v (abs _ t)) = performCheck2 (suc db) t
 performCheck2 db (pat-lam cs args) =
   do
     tcs ← return (clsToTerms cs)
-    lens ← return $ map clToPtLen cs
+    lens ← return (clsToPtLens cs)
     foldr (λ x y → let px = fst x ; len = snd x in performCheck2 (db + len) px) (return unit) (zip tcs lens)
     constrains db args
 performCheck2 db (lit l) = return unit
@@ -270,12 +273,12 @@ performCheck3 db (def f args) =
                         (arg i (var x _) ∷ x₁) → case x <? db of
                                                    λ { false → return unit ;
                                                        true → typeError ((strErr "We cannot send PF typed data through the network.") ∷ [])} ;
-                        (arg i x ∷ x₁) → typeError ((strErr "Internal Error. Please report it. 2") ∷ [])}})
+                        (arg i x ∷ x₁) → return unit}})
 performCheck3 db (lam v (abs _ x)) = performCheck3 (suc db) x
 performCheck3 db (pat-lam cs args) =
   do
     tcs ← return (clsToTerms cs)
-    lens ← return $ map clToPtLen cs
+    lens ← return (clsToPtLens cs)
     foldr (λ x y → let px = fst x ; len = snd x in performCheck3 (db + len) px) (return unit) (zip tcs lens)
     foldt args (λ x y → performCheck3 db y) (return unit)
 performCheck3 db x = return unit
@@ -311,22 +314,115 @@ onlyCoPatterns (pat-lam cs args) =
     return unit
 onlyCoPatterns (lit l) = return unit
 onlyCoPatterns unknown = return unit
-onlyCoPatterns x =  typeError ((strErr "Internal error, report it 10") ∷ [])
+onlyCoPatterns x =  typeError ((strErr "Internal error, report it 11") ∷ [])
 
 
 
-mayProd : {A B : Set} → List (Maybe A × Maybe B) → List (A × B)
+piLen : Term → TC Nat
+piLen (pi a (abs s x)) =
+  do
+    n ← piLen x
+    return $ suc n
+piLen x = typeError ((strErr "Internal error, report it 4") ∷ [])
+
+
+
+
+updateLoc : Nat → Either Term Nat → Either Term Nat
+updateLoc n (left x) = left x
+updateLoc n (right x) = right (x + n)
+
+
+
+
+last : ∀{a} → {A : Set a} → List A → Maybe A
+last [] = nothing
+last [ x ] = just x
+last (x ∷ zs@(x₁ ∷ xs)) = last zs
+
+
+-- Agent Role
+-- IMPORTANT FIX : I need to return the term, and in another function update the de bruijn indexes.
+findARole : Term → TC $ Either Term Nat
+findARole (pi a (abs s x)) = findARole x
+findARole (def f args) = case (f == quote Protocol.PF) of
+                           λ { (yes x) → case (last args) of
+                                          λ { nothing → typeError ((strErr "Internal error, report it 5") ∷ []) ;
+                                              (just t) → case t of
+                                                           λ { (arg i (var x args)) → return $ right x ;
+                                                               (arg i t) → return $ left t}} ;
+                               (no x) → typeError ((strErr "Internal error, report it 6") ∷ [])}
+findARole x = typeError ((strErr "Internal error, report it 7") ∷ [])
+
+
+
+-- Equality on the first term.
+eithEq : Either Term Nat → Either Term Nat → Either Bool (Nat × Nat)
+eithEq (left x) (left x₁) = left $ isYes (x == x₁)
+eithEq (left x) (right x₁) = left false
+eithEq (right x) (left x₁) = left false
+eithEq (right x) (right x₁) = right $ x , x₁
+
+-- Case 1 It is a projection and not a local function.
+--
+
+{-# TERMINATING #-}
+performCheck4 : Term → Either Term Nat → TC ⊤
+performCheck4 (var x args) e = do
+                                mapM (λ {(arg i y) → performCheck4 y e}) args
+                                return unit
+performCheck4 (con c args) e = do
+                                mapM (λ {(arg i y) → performCheck4 y e}) args
+                                return unit
+performCheck4 (def f args) e =
+  do
+    mapM (λ {(arg i y) → performCheck4 y e}) args
+    case (isFun<l f) of
+      λ { false → return unit ;
+          true → case (rmUnknown args) of
+                   λ { [] → typeError ((strErr "Internal Error. Please report it. 12") ∷ []) ;
+                       (arg i (def f fargs) ∷ x₁) →  (do
+                                                    ty ← getType f
+                                                    rl ← findARole ty
+                                                    case (eithEq e rl) of
+                                                      λ { (left false) → typeError ((strErr "The accepted role of the agent of the upper function should be inherited by all called functions (const term)") ∷ []) ;
+                                                          (left true) → return unit ;
+                                                          (right (fst , snd)) → case (index fargs snd) of
+                                                                                  λ { nothing → typeError ((strErr "Internal Error. Please report it. 13") ∷ []) ;
+                                                                                      (just (arg i (var x args))) → case (x == fst) of
+                                                                                                                      λ { (yes x₂) → return unit ;
+                                                                                                                          (no x₂) → typeError ((strErr "The accepted role of the agent of the upper function should be inherited by all called functions (var term , diff de bruijn)") ∷ [])} ;
+                                                                                      (just (arg i x)) → typeError ((strErr "The accepted role of the agent of the upper function should be inherited by all called functions (there is const and not var)") ∷ [])}});
+                       (arg i x ∷ x₁) → return unit}}
+performCheck4 (lam v (abs _ t)) e = performCheck4 t $ updateLoc 1 e
+performCheck4 (pat-lam cs args) e =
+  do
+    tcs ← return (clsToTerms cs)
+    lens ← return (clsToPtLens cs)
+    mapM (λ {(t , len) → performCheck4 t (updateLoc len e)}) (zip tcs lens)
+    mapM (λ {(arg i y) → performCheck4 y e}) args
+    return unit
+performCheck4 (lit l) e = return unit
+performCheck4 unknown e = return unit
+performCheck4 x e =  typeError ((strErr "Internal error, report it 10") ∷ [])
+
+
+
+performCheck5 : Term → Either Term Nat → TC ⊤
+performCheck5 t e = {!!}
+
+mayProd : {A B C : Set} → List (Maybe A × Maybe B × Maybe C) → List (A × B × C)
 mayProd [] = []
-mayProd ((nothing , snd) ∷ mls) = mayProd mls
-mayProd ((just x , nothing) ∷ mls) = mayProd mls
-mayProd ((just x , just y) ∷ mls) = (x , y) ∷ mayProd mls
+mayProd ((nothing , snd , _) ∷ mls) = mayProd mls
+mayProd ((just x , nothing , _) ∷ mls) = mayProd mls
+mayProd ((just x , just y , nothing) ∷ mls) = mayProd mls
+mayProd ((just x , just y , just z) ∷ mls) = (x , y , z) ∷ mayProd mls
 
 
 typeCheckS : Name → TC ⊤
 typeCheckS nm =
   do
     debugPrint "tychS" 9 (strErr ("Name : \n" & show nm) ∷ [])
-    ty ← getType nm
     t ← getDefinition nm
     cls ← isFun? t
     (cls , bprs , b<ls) ← performCheck1 cls
@@ -334,15 +430,20 @@ typeCheckS nm =
     ¬<l&¬proj b<ls bprs
     mapM onlyCoPatterns (clsToTerms cls)
     -- prjs represent the case where we have a projection and it is not a local function.
-    prjs ← return $ mayProd $ map (λ x → let cl = fst x in  (clToDb cl , clToTerm cl) ) $ filter (λ x → (fst (snd x)) && (snd (snd x))) (zip cls (zip bprs b<ls))
+    prjs ← return $ mayProd $ map (λ x → let cl = fst x in  (clToDb cl , clToTerm cl , clToPtLen cl) ) $ filter (λ x → (fst (snd x)) && (snd (snd x))) (zip cls (zip bprs b<ls))
     debugPrint "tychS" 9 (strErr ("Protocols : \n" & show (length prjs)) ∷ [])
+    ty ← getType nm
+    plen ← piLen ty
+    arl ← findARole ty
     mapM (λ x →
         let db = fst x 
-            t = snd x in
+            t = fst $ snd x
+            clen = snd $ snd x in
         do    
           debugPrint "tychS" 9 (strErr ("PerformCheck2 db: " & show db) ∷ [])
           performCheck2 db t
-          performCheck3 db t) prjs
+          performCheck3 db t
+          performCheck4 t (updateLoc (clen - plen) arl)) prjs
     return unit
 
 
@@ -409,48 +510,22 @@ macro
       unify hole u
 
 
-last : ∀{a} → {A : Set a} → List A → Maybe A
-last [] = nothing
-last [ x ] = just x
-last (x ∷ zs@(x₁ ∷ xs)) = last zs
-
-
-piLen : Term → TC Nat
-piLen (pi a (abs s x)) =
-  do
-    n ← piLen x
-    return $ suc n
-piLen x = typeError ((strErr "Internal error, report it 4") ∷ [])
-
--- Agent Role
-findARole : Term → TC $ Either Term Nat
-findARole (pi a (abs s x)) = findARole x
-findARole (def f args) = case (f == quote Protocol.PF) of
-                           λ { (yes x) → case (last args) of
-                                          λ { nothing → typeError ((strErr "Internal error, report it 5") ∷ []) ;
-                                              (just t) → case t of
-                                                           λ { (arg i (var x args)) → return $ right x ;
-                                                               (arg i t) → return $ left t}} ;
-                               (no x) → typeError ((strErr "Internal error, report it 6") ∷ [])}
-findARole x = typeError ((strErr "Internal error, report it 7") ∷ [])
 
 
 
 
 
 
--- -- Case 1 It is a projection and not a local function.
--- performCheck4 : Term → List Clause → List Bool → TC ⊤
--- performCheck4 ty cls bprs =
---   do
---     pl ← piLen ty
---     {!!}
 
 
--- -- case 2 It is not a projection.
+-- IMPORTANT We need to check the type of the Vars outside of performCheck4. ---> performCheck5.
 
--- -- There are two more checks.
--- -- B : The type of PFs need to correspond to the resulting type. The roles must match. If the role is given through a var, all Pf functions in the definition must get that var as a first arg, we need to inspect its type.
--- -- If not, the type must have the same constant Role.
--- -- C : Those that get the Role as a var must give it to all other abstract PF arguments , because of that, we do not need to inspect vars for B.
+-- Are aptter
+
+-- case 2 It is not a projection.
+
+-- There are two more checks.
+-- B : The type of PFs need to correspond to the resulting type. The roles must match. If the role is given through a var, all Pf functions in the definition must get that var as a first arg, we need to inspect its type.
+-- If not, the type must have the same constant Role.
+-- C : Those that get the Role as a var must give it to all other abstract PF arguments , because of that, we do not need to inspect vars for B.
 
