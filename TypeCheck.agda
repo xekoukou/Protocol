@@ -529,3 +529,7 @@ macro
 -- If not, the type must have the same constant Role.
 -- C : Those that get the Role as a var must give it to all other abstract PF arguments , because of that, we do not need to inspect vars for B.
 
+
+
+
+--- Extended Lmabdas and lambdas need to be reconsidered. I think that they should not be allowed.
